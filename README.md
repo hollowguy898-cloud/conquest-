@@ -86,13 +86,117 @@ make -j$(nproc)
 | H | Show help |
 | Escape | Quit |
 
+## Training Mode (Headless Self-Play)
+
+CONQUEST includes a headless training mode for ML model training. It runs AI vs AI self-play games, collecting `(state, policy, value)` tuples for reinforcement learning or supervised learning.
+
+### Building
+
+```bash
+mkdir build && cd build
+cmake .. -DBUILD_GUI=OFF   # Headless only (no SDL2 needed)
+# OR
+cmake ..                    # Build both GUI and headless
+make -j$(nproc)
+```
+
+This produces `conquest_train` (always built, no dependencies) and optionally `conquest` (GUI, requires SDL2+OpenGL).
+
+### Running Self-Play
+
+```bash
+# Basic: 100 episodes, AI depth 3
+./conquest_train --episodes 100 --depth 3 --output-dir ./training_data
+
+# Fast: 1000 episodes, depth 2, shorter time limit
+./conquest_train --episodes 1000 --depth 2 --time-limit 500 --output-dir ./data
+
+# All options
+./conquest_train --help
+```
+
+### Command-Line Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--episodes N` | 100 | Number of self-play games |
+| `--depth N` | 3 | AI search depth |
+| `--time-limit N` | 1000 | AI time limit per move (ms) |
+| `--temperature F` | 1.0 | Policy temperature (higher = more random) |
+| `--no-priors` | off | Use uniform policy instead of heuristic priors |
+| `--max-turns N` | 200 | Max turns before declaring a draw |
+| `--seed N` | 1 | Starting map seed |
+| `--output-dir DIR` | ./training_data | Output directory |
+| `--single-file` | off | Write all data to one file |
+| `--verbose` | off | Print per-episode details |
+| `--no-dedup` | off | Disable position deduplication |
+| `--sequential-draft` | off | Sequential (non-random) tech draft |
+
+### Data Format
+
+Each episode file contains binary `(state, policy, value)` tuples:
+
+- **State features**: 3568 floats (28 channels × 127 hexes + 12 global features)
+- **Policy**: 1018 floats (move/attack/spawn/capture/fortify/end-turn probabilities)
+- **Value**: 1 float (game outcome from current player's perspective: +1 win, -1 loss, 0 draw)
+
+### Loading Data in Python
+
+```python
+from train_loader import ConquestDataset, ConquestTorchDataset
+
+# Load all episodes from a directory
+dataset = ConquestDataset("training_data/")
+features = dataset.get_features_array()  # (N, 3568) numpy array
+policies = dataset.get_policy_array()     # (N, 1018) numpy array
+values = dataset.get_value_array()        # (N,) numpy array
+
+# Use with PyTorch
+from torch.utils.data import DataLoader
+torch_dataset = ConquestTorchDataset("training_data/")
+loader = DataLoader(torch_dataset, batch_size=64, shuffle=True)
+for batch in loader:
+    features = batch["features"]  # (B, 3568)
+    policy   = batch["policy"]    # (B, 1018)
+    value    = batch["value"]      # (B,)
+```
+
+### Feature Encoding
+
+The state is encoded as an AlphaZero-style channel layout:
+
+**Per-hex channels (127 hexes × 28 channels):**
+- Ch 0-4: Terrain one-hot (plains, mountain, water, high_ground, victory)
+- Ch 5: Elevation
+- Ch 6-7: Influence (P1, P2, normalized)
+- Ch 8-9: Ownership (P1, P2, binary)
+- Ch 10-16: P1 unit type one-hot
+- Ch 17-23: P2 unit type one-hot
+- Ch 24-25: Unit HP ratio (P1, P2)
+- Ch 26-27: Unit AP (P1, P2, normalized)
+
+**Global features (12 floats):**
+- Current player, turn, energy, victory nodes, tiles, units, techs
+
+### Policy Encoding
+
+The policy vector has 1018 slots covering all possible actions:
+- Slots 0-126: Move to hex
+- Slots 127-253: Attack hex
+- Slots 254-888: Spawn (5 unit types × 127 hexes)
+- Slots 889-1015: Capture hex
+- Slot 1016: Fortify
+- Slot 1017: End turn
+
 ## Project Structure
 
 ```
 conquest/
-├── CMakeLists.txt        # Build configuration
+├── CMakeLists.txt        # Build configuration (GUI + headless targets)
 ├── README.md             # This file
 ├── .gitignore            # Ignored files
+├── tools/
+│   └── train_loader.py   # Python data loader (numpy + PyTorch)
 └── src/
     ├── core.h            # Core types, hex math, constants, Zobrist hashing
     ├── board.h           # Board API
@@ -101,9 +205,14 @@ conquest/
     ├── game.cpp          # Influence, combat, moves, turns, tech, victory
     ├── ai.h              # AI API
     ├── ai.cpp            # Alpha-beta + quiescence + transposition table
-    ├── renderer.h        # Renderer API
-    ├── renderer.cpp      # SDL2+OpenGL renderer, bitmap font, procedural unit shapes
-    └── main.cpp          # Entry point, event loop, game application
+    ├── state_encoder.h   # ML feature extraction API
+    ├── state_encoder.cpp # State→tensor, move→policy slot encoding
+    ├── trainer.h         # Training mode API
+    ├── trainer.cpp       # Self-play loop, data collection
+    ├── train_main.cpp    # Headless entry point (conquest_train)
+    ├── renderer.h        # Renderer API (GUI only)
+    ├── renderer.cpp      # SDL2+OpenGL renderer, bitmap font (GUI only)
+    └── main.cpp          # GUI entry point (conquest)
 ```
 
 ## Architecture
