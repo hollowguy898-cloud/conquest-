@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+cmake-build-*/
+
+# Object files
+*.o
+*.o.d
+
+# Compiled executables
+conquest
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
